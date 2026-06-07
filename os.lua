@@ -1,32 +1,332 @@
 --[[
-  AdvancedDesktop OS for ComputerCraft Advanced Computer
-  - Desktop with icons
-  - Taskbar with clock + window buttons
-  - Start menu with app list
-  - Window manager: move, close, minimize, maximize
-  - Example apps: Shell, File Browser, Viewer
+  NovaOS v0.1 - Full-stack OS for ComputerCraft Advanced Computer
+  - Stage 0: Firmware splash
+  - Stage 1: BIOS menu (boot, settings, info, power)
+  - Stage 2: Bootloader with progress bar
+  - Stage 3: Desktop OS with window manager, start menu, taskbar
 
-  Save as: /startup or /os.lua and run from startup
+  Future: cluster module (multi-computer compute nodes via rednet)
 ]]
 
--- CONFIG -------------------------------------------------
+-----------------------------
+-- GLOBAL / ENV SETUP
+-----------------------------
 
-local DESKTOP_BG   = colors.blue
-local TASKBAR_BG   = colors.gray
-local TASKBAR_FG   = colors.white
-local TITLEBAR_BG  = colors.lightGray
-local TITLEBAR_FG  = colors.black
-local WINDOW_BG    = colors.black
-local ACTIVE_BORDER = colors.yellow
-local INACTIVE_BORDER = colors.gray
-
--- STATE --------------------------------------------------
-
+local term = term
+local native = term.current()
 local w, h = term.getSize()
 
----@class Window
--- id, x, y, w, h, title, appDraw, handle, dragging, dragOffX, dragOffY
--- minimized, maximized, prevX, prevY, prevW, prevH
+local function resize()
+  w, h = term.getSize()
+end
+
+-----------------------------
+-- SIMPLE GRAPHICS LAYER
+-----------------------------
+
+local gfx = {}
+
+function gfx.clear(bg)
+  term.setBackgroundColor(bg or colors.black)
+  term.setTextColor(colors.white)
+  term.clear()
+end
+
+function gfx.fillRect(x, y, ww, hh, bg)
+  term.setBackgroundColor(bg or colors.black)
+  for iy = y, y + hh - 1 do
+    if iy >= 1 and iy <= h then
+      term.setCursorPos(x, iy)
+      term.write(string.rep(" ", math.max(0, math.min(ww, w - x + 1))))
+    end
+  end
+end
+
+function gfx.frameRect(x, y, ww, hh, border)
+  term.setBackgroundColor(border or colors.gray)
+  for iy = y, y + hh - 1 do
+    if iy >= 1 and iy <= h then
+      term.setCursorPos(x, iy)
+      term.write(string.rep(" ", math.max(0, math.min(ww, w - x + 1))))
+    end
+  end
+end
+
+function gfx.shadowRect(x, y, ww, hh)
+  local sx = x + 1
+  local sy = y + 1
+  term.setBackgroundColor(colors.gray)
+  for iy = sy, sy + hh - 1 do
+    if iy >= 1 and iy <= h then
+      term.setCursorPos(sx, iy)
+      term.write(string.rep(" ", math.max(0, math.min(ww, w - sx + 1))))
+    end
+  end
+end
+
+function gfx.text(x, y, text, fg, bg)
+  if y < 1 or y > h then return end
+  term.setCursorPos(x, y)
+  if bg then term.setBackgroundColor(bg) end
+  if fg then term.setTextColor(fg) end
+  term.write(text)
+end
+
+function gfx.centerText(y, text, fg, bg)
+  local cx = math.floor((w - #text) / 2) + 1
+  gfx.text(cx, y, text, fg, bg)
+end
+
+-----------------------------
+-- CONFIG / SETTINGS
+-----------------------------
+
+local configPath = "/nova_config"
+local config = {
+  theme = {
+    desktop_bg = colors.blue,
+    taskbar_bg = colors.gray,
+    taskbar_fg = colors.white,
+    titlebar_bg = colors.lightGray,
+    titlebar_fg = colors.black,
+    window_bg = colors.black,
+    active_border = colors.yellow,
+    inactive_border = colors.gray,
+  },
+  boot_delay = 3,   -- seconds before auto-boot
+}
+
+local function loadConfig()
+  if fs.exists(configPath) then
+    local f = fs.open(configPath, "r")
+    local ok, data = pcall(textutils.unserialize, f.readAll())
+    f.close()
+    if ok and type(data) == "table" then
+      config = data
+    end
+  end
+end
+
+local function saveConfig()
+  local f = fs.open(configPath, "w")
+  f.write(textutils.serialize(config))
+  f.close()
+end
+
+loadConfig()
+
+-----------------------------
+-- STAGE 0: FIRMWARE SPLASH
+-----------------------------
+
+local function firmwareSplash()
+  resize()
+  gfx.clear(colors.black)
+
+  gfx.centerText(3, "Nova Firmware v0.1", colors.cyan)
+  gfx.centerText(5, "Initializing system...", colors.white)
+
+  gfx.fillRect(5, h - 3, w - 8, 1, colors.gray)
+  for i = 0, w - 8 do
+    gfx.fillRect(5, h - 3, i, 1, colors.green)
+    os.sleep(0.02)
+  end
+
+  gfx.centerText(h - 1, "Press F2 for BIOS", colors.lightGray)
+end
+
+-----------------------------
+-- STAGE 1: BIOS MENU
+-----------------------------
+
+local function biosMenu()
+  resize()
+  gfx.clear(colors.black)
+
+  local menuItems = {
+    "Boot NovaOS",
+    "Settings",
+    "System Info",
+    "Shutdown",
+    "Reboot",
+  }
+
+  local selected = 1
+
+  local function drawMenu()
+    gfx.clear(colors.black)
+    gfx.centerText(2, "Nova BIOS v0.1", colors.cyan)
+    gfx.centerText(3, "Advanced Computer", colors.lightGray)
+
+    local mw, mh = 30, #menuItems + 4
+    local mx = math.floor((w - mw) / 2) + 1
+    local my = math.floor((h - mh) / 2)
+
+    gfx.shadowRect(mx, my, mw, mh)
+    gfx.frameRect(mx, my, mw, mh, colors.gray)
+    gfx.fillRect(mx + 1, my + 1, mw - 2, mh - 2, colors.black)
+
+    gfx.text(mx + 2, my + 1, "BIOS Menu", colors.white)
+
+    for i, label in ipairs(menuItems) do
+      local y = my + 2 + i
+      local fg = (i == selected) and colors.black or colors.white
+      local bg = (i == selected) and colors.white or colors.black
+      gfx.text(mx + 3, y, label, fg, bg)
+    end
+
+    gfx.centerText(h - 1, "Use UP/DOWN, ENTER, ESC", colors.lightGray)
+  end
+
+  drawMenu()
+
+  while true do
+    local e, p1 = os.pullEvent()
+    if e == "key" then
+      if p1 == keys.up then
+        if selected > 1 then selected = selected - 1 end
+        drawMenu()
+      elseif p1 == keys.down then
+        if selected < #menuItems then selected = selected + 1 end
+        drawMenu()
+      elseif p1 == keys.enter then
+        return menuItems[selected]
+      elseif p1 == keys.escape then
+        return "Boot NovaOS"
+      end
+    elseif e == "term_resize" then
+      resize()
+      drawMenu()
+    end
+  end
+end
+
+-----------------------------
+-- BIOS: SETTINGS SCREEN
+-----------------------------
+
+local function biosSettings()
+  resize()
+  local options = {
+    { name = "Desktop: Blue",  apply = function() config.theme.desktop_bg = colors.blue end },
+    { name = "Desktop: Green", apply = function() config.theme.desktop_bg = colors.green end },
+    { name = "Desktop: Purple",apply = function() config.theme.desktop_bg = colors.purple end },
+    { name = "Boot delay: 1s", apply = function() config.boot_delay = 1 end },
+    { name = "Boot delay: 3s", apply = function() config.boot_delay = 3 end },
+    { name = "Boot delay: 5s", apply = function() config.boot_delay = 5 end },
+    { name = "Back",           apply = function() end },
+  }
+
+  local selected = 1
+
+  local function draw()
+    gfx.clear(colors.black)
+    gfx.centerText(2, "BIOS Settings", colors.cyan)
+
+    local mw, mh = 32, #options + 4
+    local mx = math.floor((w - mw) / 2) + 1
+    local my = math.floor((h - mh) / 2)
+
+    gfx.shadowRect(mx, my, mw, mh)
+    gfx.frameRect(mx, my, mw, mh, colors.gray)
+    gfx.fillRect(mx + 1, my + 1, mw - 2, mh - 2, colors.black)
+
+    for i, opt in ipairs(options) do
+      local y = my + 1 + i
+      local fg = (i == selected) and colors.black or colors.white
+      local bg = (i == selected) and colors.white or colors.black
+      gfx.text(mx + 2, y, opt.name, fg, bg)
+    end
+
+    gfx.centerText(h - 1, "UP/DOWN, ENTER, ESC", colors.lightGray)
+  end
+
+  draw()
+
+  while true do
+    local e, p1 = os.pullEvent()
+    if e == "key" then
+      if p1 == keys.up then
+        if selected > 1 then selected = selected - 1 end
+        draw()
+      elseif p1 == keys.down then
+        if selected < #options then selected = selected + 1 end
+        draw()
+      elseif p1 == keys.enter then
+        options[selected].apply()
+        saveConfig()
+        if options[selected].name == "Back" then
+          return
+        else
+          draw()
+        end
+      elseif p1 == keys.escape then
+        return
+      end
+    elseif e == "term_resize" then
+      resize()
+      draw()
+    end
+  end
+end
+
+-----------------------------
+-- BIOS: SYSTEM INFO
+-----------------------------
+
+local function biosSystemInfo()
+  resize()
+  gfx.clear(colors.black)
+  gfx.centerText(2, "System Information", colors.cyan)
+
+  local info = {
+    "Computer ID: " .. os.getComputerID(),
+    "Label: " .. (os.getComputerLabel() or "<none>"),
+    "Lua version: " .. _VERSION,
+    "NovaOS version: 0.1",
+    "Cluster: disabled (future)",
+  }
+
+  for i, line in ipairs(info) do
+    gfx.centerText(4 + i, line, colors.white)
+  end
+
+  gfx.centerText(h - 1, "Press any key to return", colors.lightGray)
+  os.pullEvent("key")
+end
+
+-----------------------------
+-- STAGE 2: BOOTLOADER
+-----------------------------
+
+local function bootloader()
+  resize()
+  gfx.clear(colors.black)
+  gfx.centerText(3, "Nova Bootloader", colors.cyan)
+  gfx.centerText(5, "Loading NovaOS...", colors.white)
+
+  local barW = w - 10
+  local bx = 6
+  local by = h - 4
+  gfx.fillRect(bx, by, barW, 1, colors.gray)
+
+  local steps = 20
+  for i = 1, steps do
+    local progress = math.floor(barW * (i / steps))
+    gfx.fillRect(bx, by, progress, 1, colors.green)
+    os.sleep(0.05)
+  end
+
+  gfx.centerText(h - 2, "Boot complete.", colors.lightGray)
+  os.sleep(0.3)
+end
+
+-----------------------------
+-- STAGE 3: DESKTOP OS
+-----------------------------
+
+local theme = config.theme
+
 local windows = {}
 local nextWinId = 1
 local focusedWinId = nil
@@ -37,46 +337,19 @@ local desktopIcons = {
   { name = "Viewer",  app = "viewer" },
 }
 
--- UTILS --------------------------------------------------
-
-local function centerText(y, text, fg, bg)
-  term.setCursorPos(math.floor((w - #text) / 2) + 1, y)
-  if bg then term.setBackgroundColor(bg) end
-  if fg then term.setTextColor(fg) end
-  term.clearLine()
-  term.write(text)
-end
-
-local function drawDesktop()
-  term.setBackgroundColor(DESKTOP_BG)
-  term.setTextColor(colors.white)
-  term.clear()
-
-  centerText(2, "AdvancedDesktop OS", colors.white, DESKTOP_BG)
-  centerText(3, "Advanced Computer", colors.yellow, DESKTOP_BG)
-
-  local cols = 4
-  local iconW = math.floor(w / cols)
-  local row = 0
-  local col = 0
-
-  for i, icon in ipairs(desktopIcons) do
-    col = (i - 1) % cols
-    row = math.floor((i - 1) / cols)
-
-    local ix = col * iconW + 2
-    local iy = 5 + row * 3
-
-    term.setCursorPos(ix, iy)
-    term.setBackgroundColor(DESKTOP_BG)
-    term.setTextColor(colors.white)
-    term.write("[" .. icon.name .. "]")
-
-    icon.x = ix
-    icon.y = iy
-    icon.w = #("[" .. icon.name .. "]")
-    icon.h = 1
-  end
+local function newWindow(title, x, y, ww, hh)
+  local win = {
+    id = nextWinId,
+    x = x, y = y,
+    w = ww, h = hh,
+    title = title,
+    minimized = false,
+    maximized = false,
+  }
+  nextWinId = nextWinId + 1
+  table.insert(windows, win)
+  focusedWinId = win.id
+  return win
 end
 
 local function getWindowById(id)
@@ -94,73 +367,6 @@ local function bringToFront(win)
   end
   table.insert(windows, win)
   focusedWinId = win.id
-end
-
-local function findWindowAt(x, y)
-  for i = #windows, 1, -1 do
-    local win = windows[i]
-    if not win.minimized then
-      if x >= win.x and x <= win.x + win.w - 1 and
-         y >= win.y and y <= win.y + win.h - 1 then
-        return win
-      end
-    end
-  end
-  return nil
-end
-
--- WINDOW DRAWING -----------------------------------------
-
-local function drawWindow(win)
-  if win.minimized then return end
-
-  local x, y, ww, hh = win.x, win.y, win.w, win.h
-
-  -- Border (active vs inactive)
-  local borderColor = (focusedWinId == win.id) and ACTIVE_BORDER or INACTIVE_BORDER
-  term.setBackgroundColor(borderColor)
-  term.setTextColor(borderColor)
-  for iy = y - 1, y + hh do
-    if iy >= 1 and iy <= h - 1 then
-      term.setCursorPos(x - 1, iy)
-      term.write(string.rep(" ", ww + 2))
-    end
-  end
-
-  -- Title bar
-  term.setBackgroundColor(TITLEBAR_BG)
-  term.setTextColor(TITLEBAR_FG)
-  if y >= 1 and y <= h - 1 then
-    term.setCursorPos(x, y)
-    term.write(string.rep(" ", ww))
-  end
-
-  -- Title text
-  term.setCursorPos(x + 1, y)
-  local title = win.title or "Window"
-  if #title > ww - 8 then
-    title = title:sub(1, ww - 8)
-  end
-  term.write(title)
-
-  -- Buttons: [_] [□] [X]
-  local btnX = x + ww - 9
-  term.setCursorPos(btnX, y)
-  term.write("[_][□][X]")
-
-  -- Body
-  term.setBackgroundColor(WINDOW_BG)
-  term.setTextColor(colors.white)
-  for iy = y + 1, y + hh - 1 do
-    if iy >= 1 and iy <= h - 1 then
-      term.setCursorPos(x, iy)
-      term.write(string.rep(" ", ww))
-    end
-  end
-
-  if win.appDraw then
-    win.appDraw(win)
-  end
 end
 
 local function closeWindow(win)
@@ -184,7 +390,6 @@ end
 
 local function maximizeWindow(win)
   if win.maximized then
-    -- restore
     win.x, win.y, win.w, win.h =
       win.prevX, win.prevY, win.prevW, win.prevH
     win.maximized = false
@@ -204,34 +409,72 @@ local function restoreWindow(win)
   bringToFront(win)
 end
 
--- TASKBAR / START MENU -----------------------------------
+-----------------------------
+-- DESKTOP / TASKBAR / START
+-----------------------------
+
+local startMenu = { visible = false }
+
+local function drawDesktop()
+  gfx.clear(theme.desktop_bg)
+  gfx.centerText(2, "NovaOS Desktop", colors.white, theme.desktop_bg)
+  gfx.centerText(3, "Advanced Computer", colors.yellow, theme.desktop_bg)
+
+  local cols = 4
+  local iconW = math.floor(w / cols)
+  for i, icon in ipairs(desktopIcons) do
+    local col = (i - 1) % cols
+    local row = math.floor((i - 1) / cols)
+    local ix = col * iconW + 2
+    local iy = 5 + row * 3
+    local label = "[" .. icon.name .. "]"
+    gfx.text(ix, iy, label, colors.white, theme.desktop_bg)
+    icon.x = ix
+    icon.y = iy
+    icon.w = #label
+    icon.h = 1
+  end
+end
+
+local function drawWindow(win)
+  if win.minimized then return end
+
+  local x, y, ww, hh = win.x, win.y, win.w, win.h
+
+  local borderColor = (focusedWinId == win.id) and theme.active_border or theme.inactive_border
+  gfx.frameRect(x - 1, y - 1, ww + 2, hh + 2, borderColor)
+  gfx.shadowRect(x, y, ww, hh)
+
+  gfx.fillRect(x, y, ww, 1, theme.titlebar_bg)
+  gfx.text(x + 1, y, (win.title or "Window"):sub(1, ww - 8), theme.titlebar_fg, theme.titlebar_bg)
+
+  local btnX = x + ww - 9
+  gfx.text(btnX, y, "[_][□][X]", theme.titlebar_fg, theme.titlebar_bg)
+
+  gfx.fillRect(x, y + 1, ww, hh - 1, theme.window_bg)
+
+  if win.appDraw then
+    win.appDraw(win)
+  end
+end
 
 local function drawTaskbar()
-  term.setBackgroundColor(TASKBAR_BG)
-  term.setTextColor(TASKBAR_FG)
-  term.setCursorPos(1, h)
-  term.clearLine()
+  gfx.fillRect(1, h, w, 1, theme.taskbar_bg)
+  gfx.text(2, h, "[Start]", theme.taskbar_fg, theme.taskbar_bg)
 
-  -- Start button
-  term.setCursorPos(2, h)
-  term.write("[Start]")
-
-  -- Window buttons
   local xPos = 10
   for _, win in ipairs(windows) do
     local label = win.title or ("Win " .. win.id)
     if #label > 10 then label = label:sub(1, 10) end
     local text = "[" .. label .. "]"
     if xPos + #text < w - 10 then
-      term.setCursorPos(xPos, h)
+      local fg = theme.taskbar_fg
+      local bg = theme.taskbar_bg
       if focusedWinId == win.id and not win.minimized then
-        term.setBackgroundColor(colors.white)
-        term.setTextColor(colors.black)
-      else
-        term.setBackgroundColor(TASKBAR_BG)
-        term.setTextColor(TASKBAR_FG)
+        fg = colors.black
+        bg = colors.white
       end
-      term.write(text)
+      gfx.text(xPos, h, text, fg, bg)
       win.taskX = xPos
       win.taskW = #text
       xPos = xPos + #text + 1
@@ -241,53 +484,40 @@ local function drawTaskbar()
     end
   end
 
-  -- Clock
-  term.setBackgroundColor(TASKBAR_BG)
-  term.setTextColor(TASKBAR_FG)
   local timeStr = textutils.formatTime(os.time(), true)
   local clockText = " " .. timeStr .. " "
   local cx = w - #clockText + 1
-  term.setCursorPos(cx, h)
-  term.write(clockText)
+  gfx.text(cx, h, clockText, theme.taskbar_fg, theme.taskbar_bg)
 end
 
 local function drawStartMenu()
-  -- simple dropdown from Start button
-  local menuX, menuY = 2, h - 6
+  local menuX, menuY = 2, h - 7
   if menuY < 2 then menuY = 2 end
-  local menuW, menuH = 18, 5
-
-  term.setBackgroundColor(colors.black)
-  term.setTextColor(colors.white)
-  for iy = 0, menuH - 1 do
-    term.setCursorPos(menuX, menuY + iy)
-    term.write(string.rep(" ", menuW))
-  end
-
-  local items = {
+  local menuItems = {
     "Shell",
     "File Browser",
     "Viewer",
+    "Settings",
     "Shutdown",
     "Reboot",
   }
+  local menuW, menuH = 18, #menuItems + 2
 
-  for i, label in ipairs(items) do
-    term.setCursorPos(menuX + 1, menuY + i - 1)
-    term.write(label)
+  gfx.shadowRect(menuX, menuY, menuW, menuH)
+  gfx.frameRect(menuX, menuY, menuW, menuH, colors.gray)
+  gfx.fillRect(menuX + 1, menuY + 1, menuW - 2, menuH - 2, colors.black)
+
+  for i, label in ipairs(menuItems) do
+    gfx.text(menuX + 2, menuY + i, label, colors.white, colors.black)
   end
 
-  return {
-    x = menuX,
-    y = menuY,
-    w = menuW,
-    h = menuH,
-    items = items,
-    visible = true,
-  }
+  startMenu.items = menuItems
+  startMenu.x = menuX
+  startMenu.y = menuY
+  startMenu.w = menuW
+  startMenu.h = menuH
+  startMenu.visible = true
 end
-
-local startMenu = { visible = false }
 
 local function redrawAll()
   drawDesktop()
@@ -300,63 +530,27 @@ local function redrawAll()
   end
 end
 
--- APPS ---------------------------------------------------
+-----------------------------
+-- APPS
+-----------------------------
 
-local function newWindow(title, x, y, ww, hh)
-  local win = {
-    id = nextWinId,
-    x = x, y = y,
-    w = ww, h = hh,
-    title = title,
-    minimized = false,
-    maximized = false,
-  }
-  nextWinId = nextWinId + 1
-  table.insert(windows, win)
-  bringToFront(win)
-  return win
-end
-
--- Shell app
 local function launchShell()
-  local win = newWindow("Shell",
-    5, 4,
-    math.floor(w * 0.7),
-    math.floor(h * 0.6)
-  )
+  local win = newWindow("Shell", 5, 4, math.floor(w * 0.7), math.floor(h * 0.6))
+  local shellWin = window.create(native, win.x + 1, win.y + 1, win.w - 2, win.h - 2, true)
 
-  local native = term.current()
-  local shellWin = window.create(
-    native,
-    win.x + 1, win.y + 1,
-    win.w - 2, win.h - 2,
-    true
-  )
-
-  win.appDraw = function(self)
-    -- shell draws itself
-  end
-
-  win.handle = function(self, event, p1, p2, p3)
-    -- keyboard handled by shell
-  end
+  win.appDraw = function() end
+  win.handle = function() end
 
   redrawAll()
-  local oldTerm = term.redirect(shellWin)
+  local old = term.redirect(shellWin)
   shell.run()
-  term.redirect(oldTerm)
+  term.redirect(old)
   closeWindow(win)
   redrawAll()
 end
 
--- File browser
 local function launchFiles()
-  local win = newWindow("File Browser",
-    8, 3,
-    math.floor(w * 0.6),
-    math.floor(h * 0.6)
-  )
-
+  local win = newWindow("File Browser", 8, 3, math.floor(w * 0.6), math.floor(h * 0.6))
   win.cwd = "/"
   win.scroll = 0
   win.files = fs.list(win.cwd)
@@ -369,38 +563,32 @@ local function launchFiles()
   end
 
   win.appDraw = function(self)
-    local innerX = self.x + 1
-    local innerY = self.y + 1
-    local innerW = self.w - 2
-    local innerH = self.h - 2
+    local ix = self.x + 1
+    local iy = self.y + 1
+    local iw = self.w - 2
+    local ih = self.h - 2
 
-    term.setBackgroundColor(WINDOW_BG)
-    term.setTextColor(colors.white)
-
-    term.setCursorPos(innerX, innerY)
-    term.write(("Path: %s"):format(self.cwd:sub(1, innerW)))
-    for i = 2, innerH do
+    gfx.text(ix, iy, ("Path: %s"):format(self.cwd:sub(1, iw)), colors.white, theme.window_bg)
+    for i = 2, ih do
       local idx = i - 1 + self.scroll
-      term.setCursorPos(innerX, innerY + i - 1)
-      term.write(string.rep(" ", innerW))
+      local y = iy + i - 1
+      gfx.fillRect(ix, y, iw, 1, theme.window_bg)
       local name = self.files[idx]
       if name then
         local full = fs.combine(self.cwd, name)
         local prefix = fs.isDir(full) and "[D] " or "    "
+        local fg = colors.white
+        local bg = theme.window_bg
         if idx == self.selected then
-          term.setBackgroundColor(colors.white)
-          term.setTextColor(colors.black)
-        else
-          term.setBackgroundColor(WINDOW_BG)
-          term.setTextColor(colors.white)
+          fg = colors.black
+          bg = colors.white
         end
-        term.setCursorPos(innerX, innerY + i - 1)
-        term.write((prefix .. name):sub(1, innerW))
+        gfx.text(ix, y, (prefix .. name):sub(1, iw), fg, bg)
       end
     end
   end
 
-  win.handle = function(self, event, p1, p2, p3)
+  win.handle = function(self, event, p1)
     if event == "key" then
       if p1 == keys.up then
         if self.selected > 1 then
@@ -428,11 +616,8 @@ local function launchFiles()
             if f then
               local content = f.readAll()
               f.close()
-              local vwin = newWindow("View: " .. fname,
-                self.x + 2, self.y + 2,
-                math.floor(self.w * 0.8),
-                math.floor(self.h * 0.8)
-              )
+              local vwin = newWindow("View: " .. fname, self.x + 2, self.y + 2,
+                math.floor(self.w * 0.8), math.floor(self.h * 0.8))
               vwin.text = content
               vwin.scroll = 0
               vwin.appDraw = function(sw)
@@ -440,20 +625,17 @@ local function launchFiles()
                 local iy = sw.y + 1
                 local iw = sw.w - 2
                 local ih = sw.h - 2
-                term.setBackgroundColor(WINDOW_BG)
-                term.setTextColor(colors.white)
                 local lines = {}
                 for line in (sw.text .. "\n"):gmatch("(.-)\n") do
                   table.insert(lines, line)
                 end
                 for i = 1, ih do
                   local idx = i + sw.scroll
-                  term.setCursorPos(ix, iy + i - 1)
-                  term.write(string.rep(" ", iw))
+                  local y = iy + i - 1
+                  gfx.fillRect(ix, y, iw, 1, theme.window_bg)
                   local line = lines[idx]
                   if line then
-                    term.setCursorPos(ix, iy + i - 1)
-                    term.write(line:sub(1, iw))
+                    gfx.text(ix, y, line:sub(1, iw), colors.white, theme.window_bg)
                   end
                 end
               end
@@ -484,22 +666,15 @@ local function launchFiles()
   redrawAll()
 end
 
--- Viewer app
 local function launchViewer()
-  local win = newWindow("Welcome",
-    6, 4,
-    math.floor(w * 0.6),
-    math.floor(h * 0.5)
-  )
-
+  local win = newWindow("Welcome", 6, 4, math.floor(w * 0.6), math.floor(h * 0.5))
   win.text =
-    "Welcome to AdvancedDesktop OS!\n\n" ..
-    "- Click icons on the desktop to open apps.\n" ..
-    "- Use the Start menu for system actions.\n" ..
-    "- Taskbar buttons switch/minimize windows.\n" ..
-    "- Drag windows by the title bar.\n" ..
-    "- Use [_] [□] [X] to minimize, maximize, close.\n\n" ..
-    "You can extend this OS by editing the code."
+    "Welcome to NovaOS!\n\n" ..
+    "- BIOS: F2 during splash.\n" ..
+    "- Desktop: icons + Start menu.\n" ..
+    "- Windows: drag, minimize, maximize, close.\n" ..
+    "- Taskbar: click window buttons.\n\n" ..
+    "Future: cluster module for multi-computer power."
 
   win.scroll = 0
 
@@ -508,20 +683,17 @@ local function launchViewer()
     local iy = self.y + 1
     local iw = self.w - 2
     local ih = self.h - 2
-    term.setBackgroundColor(WINDOW_BG)
-    term.setTextColor(colors.white)
     local lines = {}
     for line in (self.text .. "\n"):gmatch("(.-)\n") do
       table.insert(lines, line)
     end
     for i = 1, ih do
       local idx = i + self.scroll
-      term.setCursorPos(ix, iy + i - 1)
-      term.write(string.rep(" ", iw))
+      local y = iy + i - 1
+      gfx.fillRect(ix, y, iw, 1, theme.window_bg)
       local line = lines[idx]
       if line then
-        term.setCursorPos(ix, iy + i - 1)
-        term.write(line:sub(1, iw))
+        gfx.text(ix, y, line:sub(1, iw), colors.white, theme.window_bg)
       end
     end
   end
@@ -546,7 +718,9 @@ local appLaunchers = {
   viewer = launchViewer,
 }
 
--- INPUT HANDLING -----------------------------------------
+-----------------------------
+-- INPUT HANDLING
+-----------------------------
 
 local function toggleStartMenu()
   startMenu.visible = not startMenu.visible
@@ -555,18 +729,15 @@ end
 
 local function handleStartMenuClick(x, y)
   if not startMenu.visible then return end
-  local menu = drawStartMenu()
-  startMenu = menu
-
-  if x < menu.x or x > menu.x + menu.w - 1 or
-     y < menu.y or y > menu.y + menu.h - 1 then
+  if x < startMenu.x or x > startMenu.x + startMenu.w - 1 or
+     y < startMenu.y or y > startMenu.y + startMenu.h - 1 then
     startMenu.visible = false
     redrawAll()
     return
   end
 
-  local index = y - menu.y + 1
-  local item = menu.items[index]
+  local index = y - startMenu.y
+  local item = startMenu.items[index]
   startMenu.visible = false
 
   if item == "Shell" then
@@ -575,10 +746,13 @@ local function handleStartMenuClick(x, y)
     launchFiles()
   elseif item == "Viewer" then
     launchViewer()
+  elseif item == "Settings" then
+    biosSettings()
+    theme = config.theme
+    redrawAll()
   elseif item == "Shutdown" then
-    term.setBackgroundColor(colors.black)
-    term.clear()
-    term.setCursorPos(1, 1)
+    gfx.clear(colors.black)
+    gfx.centerText(math.floor(h / 2), "System halted.", colors.red)
     error("System halted", 0)
   elseif item == "Reboot" then
     os.reboot()
@@ -632,6 +806,19 @@ local function handleMouseClick(button, x, y)
       return
     end
     if handleTaskbarClick(x, y) then return end
+  end
+
+  local function findWindowAt(px, py)
+    for i = #windows, 1, -1 do
+      local win = windows[i]
+      if not win.minimized then
+        if px >= win.x and px <= win.x + win.w - 1 and
+           py >= win.y and py <= win.y + win.h - 1 then
+          return win
+        end
+      end
+    end
+    return nil
   end
 
   local win = findWindowAt(x, y)
@@ -689,9 +876,11 @@ local function handleKey(key)
   end
 end
 
--- MAIN LOOP ----------------------------------------------
+-----------------------------
+-- MAIN ENTRY
+-----------------------------
 
-local function main()
+local function runDesktop()
   term.setCursorBlink(false)
   redrawAll()
 
@@ -707,9 +896,48 @@ local function main()
     elseif event == "key" then
       handleKey(p1)
     elseif event == "term_resize" then
-      w, h = term.getSize()
+      resize()
       redrawAll()
     end
+  end
+end
+
+local function main()
+  firmwareSplash()
+
+  local bootDeadline = os.clock() + config.boot_delay
+  local biosRequested = false
+
+  while os.clock() < bootDeadline do
+    local e, k = os.pullEventRaw()
+    if e == "key" and k == keys.f2 then
+      biosRequested = true
+      break
+    end
+  end
+
+  local action = "Boot NovaOS"
+  if biosRequested then
+    action = biosMenu()
+  end
+
+  if action == "Boot NovaOS" then
+    bootloader()
+    runDesktop()
+  elseif action == "Settings" then
+    biosSettings()
+    bootloader()
+    runDesktop()
+  elseif action == "System Info" then
+    biosSystemInfo()
+    bootloader()
+    runDesktop()
+  elseif action == "Shutdown" then
+    gfx.clear(colors.black)
+    gfx.centerText(math.floor(h / 2), "System halted.", colors.red)
+    error("System halted", 0)
+  elseif action == "Reboot" then
+    os.reboot()
   end
 end
 
